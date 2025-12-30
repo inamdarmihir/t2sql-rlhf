@@ -14,6 +14,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import create_react_agent
+from feedback_store import FeedbackStore
 
 # Load environment variables
 load_dotenv(override=True)
@@ -38,6 +39,8 @@ class AgentState(TypedDict):
     error: str
     schema: str
     next: str
+    feedback_metrics: dict
+    similar_examples: list
 
 # ============================================================================
 # Database Manager
@@ -255,8 +258,8 @@ def cache_agent_node(cache):
         return state
     return node
 
-def sql_generator_node(db_manager):
-    """SQL generation agent node"""
+def sql_generator_node(db_manager, feedback_store):
+    """SQL generation agent node with RL feedback"""
     def node(state: AgentState) -> AgentState:
         if state.get("cached"):
             state["next"] = "executor"
@@ -265,13 +268,51 @@ def sql_generator_node(db_manager):
         schema = db_manager.get_schema()
         question = state["question"]
         
+        # Get feedback metrics for this query type
+        metrics = feedback_store.get_query_metrics(question)
+        state["feedback_metrics"] = metrics
+        
+        # Get similar successful queries for learning
+        similar_examples = feedback_store.get_similar_successful_queries(question)
+        state["similar_examples"] = similar_examples
+        
+        # Build enhanced prompt with RL feedback
         llm = ChatOpenAI(model="gpt-4", temperature=0)
+        
+        # Add performance context to prompt
+        performance_context = ""
+        if metrics['performance_level'] == 'critical':
+            performance_context = f"""
+⚠️ CRITICAL WARNING: Similar queries have failed {metrics['thumbs_down']} times.
+Previous attempts were incorrect. Be extra careful with this query type.
+"""
+        elif metrics['performance_level'] == 'poor':
+            performance_context = f"""
+⚠️ WARNING: Similar queries have {metrics['thumbs_down']} failures.
+Review the query carefully before generating.
+"""
+        elif metrics['performance_level'] == 'excellent':
+            performance_context = f"""
+✅ This query type has {metrics['thumbs_up']} successes. Continue with similar approach.
+"""
+        
+        # Add successful examples if available
+        examples_context = ""
+        if similar_examples:
+            examples_context = "\n\nSuccessful similar queries for reference:"
+            for i, ex in enumerate(similar_examples, 1):
+                examples_context += f"\nExample {i}:"
+                examples_context += f"\n  Question: {ex['question']}"
+                examples_context += f"\n  SQL: {ex['sql_query']}"
+        
         prompt = f"""Generate a SQL query for: {question}
 
 Database Schema:
 {schema}
+{performance_context}
+{examples_context}
 
-Return ONLY the SQL query."""
+Return ONLY the SQL query, no explanations."""
         
         response = llm.invoke(prompt)
         sql_query = response.content.strip()
@@ -281,7 +322,12 @@ Return ONLY the SQL query."""
             sql_query = sql_query.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
         
         state["sql_query"] = sql_query
+        
+        # Add performance warning to message
         msg = f"Generated SQL: {sql_query}"
+        if metrics.get('warning'):
+            msg += f"\n{metrics['warning']}"
+        
         print(msg)
         state["messages"].append(AIMessage(content=msg, name="sql_generator"))
         state["next"] = "executor"
@@ -327,6 +373,7 @@ class Text2SQLGraph:
     def __init__(self):
         self.cache = QdrantCache()
         self.db_manager = DatabaseManager()
+        self.feedback_store = FeedbackStore()
         self.llm = ChatOpenAI(model="gpt-4", temperature=0)
         
         # Build hierarchical graph
@@ -341,7 +388,7 @@ class Text2SQLGraph:
         
         # Add nodes
         workflow.add_node("cache_agent", cache_agent_node(self.cache))
-        workflow.add_node("sql_generator", sql_generator_node(self.db_manager))
+        workflow.add_node("sql_generator", sql_generator_node(self.db_manager, self.feedback_store))
         workflow.add_node("executor", executor_node(self.db_manager, self.cache))
         
         # Define conditional routing based on agent decisions
@@ -380,11 +427,25 @@ class Text2SQLGraph:
             "cached": False,
             "error": "",
             "schema": schema,
-            "next": ""
+            "next": "",
+            "feedback_metrics": {},
+            "similar_examples": []
         }
         
         final_state = self.graph.invoke(initial_state)
         return final_state
+    
+    def add_feedback(self, question: str, sql_query: str, feedback: str) -> Dict:
+        """Add human feedback for RL training"""
+        return self.feedback_store.add_feedback(question, sql_query, feedback)
+    
+    def get_feedback_stats(self) -> Dict:
+        """Get overall feedback statistics"""
+        return self.feedback_store.get_overall_stats()
+    
+    def get_failed_patterns(self) -> List[Dict]:
+        """Get query patterns that need improvement"""
+        return self.feedback_store.get_failed_patterns()
 
 # ============================================================================
 # Setup & Main

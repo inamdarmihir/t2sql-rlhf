@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useCopilotAction, useCopilotReadable } from '@copilotkit/react-core'
-import { Database, Loader2, CheckCircle, XCircle, Zap } from 'lucide-react'
+import { Database, Loader2, CheckCircle, XCircle, Zap, ThumbsUp, ThumbsDown, TrendingUp, AlertTriangle } from 'lucide-react'
 import axios from 'axios'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -13,6 +13,18 @@ interface QueryResult {
   cached: boolean
   error?: string
   message_count: number
+  feedback_metrics?: {
+    thumbs_up: number
+    thumbs_down: number
+    total_feedback: number
+    performance_level: string
+    warning?: string
+    success_rate: number
+  }
+  similar_examples?: Array<{
+    question: string
+    sql_query: string
+  }>
 }
 
 export default function Text2SQLInterface() {
@@ -20,6 +32,8 @@ export default function Text2SQLInterface() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<QueryResult | null>(null)
   const [schema, setSchema] = useState<string>('')
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
+  const [submittingFeedback, setSubmittingFeedback] = useState(false)
 
   // Make database schema readable by Copilot
   useCopilotReadable({
@@ -67,6 +81,7 @@ export default function Text2SQLInterface() {
 
     setLoading(true)
     setResult(null)
+    setFeedbackSubmitted(false)
 
     try {
       const response = await axios.post<QueryResult>(`${API_URL}/api/query`, {
@@ -83,6 +98,73 @@ export default function Text2SQLInterface() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleFeedback = async (feedback: 'up' | 'down') => {
+    if (!result || feedbackSubmitted) return
+
+    setSubmittingFeedback(true)
+    try {
+      const response = await axios.post(`${API_URL}/api/feedback`, {
+        question,
+        sql_query: result.sql_query,
+        feedback,
+      })
+
+      setFeedbackSubmitted(true)
+      
+      // Update result with new metrics
+      if (response.data.metrics) {
+        setResult({
+          ...result,
+          feedback_metrics: response.data.metrics,
+        })
+      }
+
+      // Show success message based on performance
+      const msg = response.data.message || 'Feedback submitted successfully!'
+      console.log(msg)
+    } catch (error: any) {
+      console.error('Failed to submit feedback:', error)
+      alert('Failed to submit feedback: ' + (error.response?.data?.detail || error.message))
+    } finally {
+      setSubmittingFeedback(false)
+    }
+  }
+
+  const getPerformanceBadge = (level: string) => {
+    switch (level) {
+      case 'critical':
+        return (
+          <div className="flex items-center gap-2 px-3 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-full text-sm font-semibold">
+            <AlertTriangle className="w-4 h-4" />
+            <span>Critical - Needs Review</span>
+          </div>
+        )
+      case 'poor':
+        return (
+          <div className="flex items-center gap-2 px-3 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 rounded-full text-sm font-semibold">
+            <AlertTriangle className="w-4 h-4" />
+            <span>Poor Performance</span>
+          </div>
+        )
+      case 'excellent':
+        return (
+          <div className="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-sm font-semibold">
+            <TrendingUp className="w-4 h-4" />
+            <span>Excellent Performance</span>
+          </div>
+        )
+      case 'good':
+        return (
+          <div className="flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-sm font-semibold">
+            <CheckCircle className="w-4 h-4" />
+            <span>Good Performance</span>
+          </div>
+        )
+      default:
+        return null
     }
   }
 
@@ -168,7 +250,7 @@ export default function Text2SQLInterface() {
         <div className="space-y-4">
           {/* Status */}
           <div className="query-card">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-4">
               <div className="flex items-center gap-2">
                 {result.error ? (
                   <>
@@ -186,25 +268,129 @@ export default function Text2SQLInterface() {
                   </>
                 )}
               </div>
-              {result.cached && (
-                <div className="flex items-center gap-1 text-sm text-purple-600 dark:text-purple-400">
-                  <Zap className="w-4 h-4" />
-                  <span>Cached Result</span>
-                </div>
-              )}
+              <div className="flex items-center gap-3 flex-wrap">
+                {result.cached && (
+                  <div className="flex items-center gap-1 text-sm text-purple-600 dark:text-purple-400">
+                    <Zap className="w-4 h-4" />
+                    <span>Cached Result</span>
+                  </div>
+                )}
+                {result.feedback_metrics && getPerformanceBadge(result.feedback_metrics.performance_level)}
+              </div>
             </div>
           </div>
 
-          {/* SQL Query */}
+          {/* SQL Query with Feedback */}
           {result.sql_query && (
             <div className="query-card">
-              <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-white">
-                Generated SQL
-              </h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Generated SQL
+                </h3>
+                {!result.error && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      Was this query correct?
+                    </span>
+                    <button
+                      onClick={() => handleFeedback('up')}
+                      disabled={feedbackSubmitted || submittingFeedback}
+                      className={`p-2 rounded-lg transition-colors ${
+                        feedbackSubmitted
+                          ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed'
+                          : 'bg-green-100 hover:bg-green-200 dark:bg-green-900/30 dark:hover:bg-green-900/50'
+                      }`}
+                      title="Thumbs up - Query is correct"
+                    >
+                      <ThumbsUp className={`w-5 h-5 ${feedbackSubmitted ? 'text-gray-400' : 'text-green-600 dark:text-green-400'}`} />
+                    </button>
+                    <button
+                      onClick={() => handleFeedback('down')}
+                      disabled={feedbackSubmitted || submittingFeedback}
+                      className={`p-2 rounded-lg transition-colors ${
+                        feedbackSubmitted
+                          ? 'bg-gray-100 dark:bg-gray-700 cursor-not-allowed'
+                          : 'bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50'
+                      }`}
+                      title="Thumbs down - Query is incorrect"
+                    >
+                      <ThumbsDown className={`w-5 h-5 ${feedbackSubmitted ? 'text-gray-400' : 'text-red-600 dark:text-red-400'}`} />
+                    </button>
+                  </div>
+                )}
+              </div>
               <pre className="code-block">
                 <code>{result.sql_query}</code>
               </pre>
+              {feedbackSubmitted && (
+                <div className="mt-3 text-sm text-green-600 dark:text-green-400">
+                  ✓ Thank you for your feedback! This helps improve the AI.
+                </div>
+              )}
             </div>
+          )}
+
+          {/* Feedback Metrics */}
+          {result.feedback_metrics && result.feedback_metrics.total_feedback > 0 && (
+            <div className="query-card bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+              <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-white">
+                Performance Metrics
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400">Thumbs Up</div>
+                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                    {result.feedback_metrics.thumbs_up}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400">Thumbs Down</div>
+                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                    {result.feedback_metrics.thumbs_down}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400">Total Feedback</div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {result.feedback_metrics.total_feedback}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400">Success Rate</div>
+                  <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                    {result.feedback_metrics.success_rate.toFixed(0)}%
+                  </div>
+                </div>
+              </div>
+              {result.feedback_metrics.warning && (
+                <div className="mt-4 p-3 bg-white dark:bg-gray-800 rounded-lg">
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                    {result.feedback_metrics.warning}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Similar Successful Examples */}
+          {result.similar_examples && result.similar_examples.length > 0 && (
+            <details className="query-card">
+              <summary className="cursor-pointer text-lg font-semibold text-gray-900 dark:text-white">
+                Similar Successful Queries ({result.similar_examples.length})
+              </summary>
+              <div className="mt-3 space-y-3">
+                {result.similar_examples.map((example, i) => (
+                  <div key={i} className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                    <div className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+                      {example.question}
+                    </div>
+                    <pre className="text-xs bg-gray-900 text-gray-100 p-2 rounded overflow-x-auto">
+                      <code>{example.sql_query}</code>
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </details>
           )}
 
           {/* Error Message */}

@@ -23,6 +23,11 @@ docker-compose up -d
 - **🗄️ Universal Database Support**: Works with any SQLAlchemy-supported database
 - **🎯 Automatic Schema Detection**: Reads your database structure dynamically
 - **🐳 Docker Compose Stack**: One command to run everything
+- **👍👎 RL Feedback Loop**: Human feedback improves SQL generation over time
+  - **2+ thumbs down**: Warning - query type needs review
+  - **3+ thumbs down**: Critical - agent needs retraining
+  - **2+ thumbs up**: Good performance
+  - **3+ thumbs up**: Excellent - consistently performing well
 
 ## 📦 Services
 
@@ -37,6 +42,10 @@ docker-compose up -d
 1. Open http://localhost:3000
 2. Type a natural language question
 3. View generated SQL and results
+4. **Provide feedback**: Click thumbs up/down to train the AI
+   - Thumbs up: Query is correct
+   - Thumbs down: Query is incorrect
+5. Watch the agent improve over time!
 
 **Example Questions:**
 ```
@@ -45,6 +54,18 @@ What are the top 5 best-selling products?
 What is the total revenue by category?
 Which customers spent more than $500?
 ```
+
+### RL Feedback System
+
+The agent learns from your feedback:
+
+- **First query**: No feedback data, generates SQL normally
+- **After 2 thumbs down**: ⚠️ Warning shown, agent becomes more careful
+- **After 3 thumbs down**: 🚨 Critical alert, agent needs retraining
+- **After 2 thumbs up**: ✅ Good performance indicator
+- **After 3 thumbs up**: 🌟 Excellent performance, agent continues approach
+
+The system uses similar successful queries as examples for future generations.
 
 ### API
 
@@ -184,6 +205,8 @@ Includes a shopping/sales database with:
 ## 📊 API Endpoints
 
 - `POST /api/query` - Execute natural language query
+- `POST /api/feedback` - Submit thumbs up/down feedback
+- `GET /api/feedback/stats` - Get overall feedback statistics
 - `GET /api/schema` - Get database schema
 - `GET /health` - Health check
 - `GET /docs` - API documentation
