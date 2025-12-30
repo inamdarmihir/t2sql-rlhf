@@ -1,4 +1,4 @@
-# Text2SQL Multi-Agent System with Qdrant Cache
+# Text2SQL Multi-Agent System with Qdrant Caching and Feedback Loop
 
 AI-powered natural language to SQL converter with semantic caching and agentic UI.
 
